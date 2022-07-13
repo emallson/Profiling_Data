@@ -1,0 +1,7 @@
+## Interface: 90200
+## Title: !Profiling_Data
+## Version: 0.0.1-dev
+## SavedVariables: Profiling_Data_Storage
+
+libs\LibStub\LibStub.lua
+src\lib.lua
