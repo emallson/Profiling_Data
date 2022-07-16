@@ -56,8 +56,9 @@ local function hookCreateFrame()
             return
         end
 
+
         local frameKey = Profiling_Data.frameKey(frame)
-        -- print('hooking frame: ' .. frame:GetDebugName())
+        -- print('hooking frame: ' .. frameKey)
 
         Profiling_Data.registerFunction(strjoin(':', frameKey, scriptType), fn)
 
@@ -104,7 +105,8 @@ local function hookCreateFrame()
             name = name,
             parent = parentName,
             template = template,
-            index = index
+            index = index,
+            creationTime = time()
         }
 
         if not anonymous then
@@ -113,10 +115,6 @@ local function hookCreateFrame()
             table.insert(createdFrames.anonymous, record)
         end
     end)
-end
-
-if isScriptProfilingEnabled() then
-    hookCreateFrame()
 end
 
 local function addonUsage()
@@ -177,10 +175,15 @@ function Profiling_Data.dumpUsage()
 end
 
 local currentEncounter = nil
+local currentMythicPlus = nil
 function Profiling_Data.startEncounter(encounterId, encounterName, difficultyId, groupSize)
+    if currentMythicPlus ~= nil then
+        return
+    end
     resetCreatedFrames()
     ResetCPUUsage()
     currentEncounter = {
+        kind = "raid",
         encounterId = encounterId,
         encounterName = encounterName,
         difficultyId = difficultyId,
@@ -191,30 +194,73 @@ end
 
 function Profiling_Data.encounterEnd(encounterID, encounterName, difficultyID, groupSize, success)
     if currentEncounter == nil then
-        -- don't do anything if we didn't see the encounter start. a mid-combat reload probably happened
+        -- don't do anything if we didn't see the encounter start. a mid-combat reload probably happened or we're in a key
         return
     end
     currentEncounter.success = true
+    currentEncounter.endTime = time()
 
     table.insert(Profiling_Data_Storage.recordings, {
         encounter = currentEncounter,
         data = Profiling_Data.buildUsageTable()
     })
+    currentEncounter = nil
 end
 
-local frame = CreateFrame("Frame")
-frame:RegisterEvent("ENCOUNTER_START")
-frame:RegisterEvent("ENCOUNTER_END")
-frame:RegisterEvent("ADDON_LOADED")
-frame:SetScript("OnEvent", function(frame, eventName, ...)
-    if eventName == "ENCOUNTER_START" then
-        Profiling_Data.startEncounter(...)
-    elseif eventName == "ENCOUNTER_END" then
-        Profiling_Data.encounterEnd(...)
-    elseif eventName == "ADDON_LOADED" then
-        local addonName = ...
-        if addonName == "Profiling_Data" then
-            Profiling_Data_Storage = Profiling_Data_Storage or { recordings = {} }
-        end
+---@param mapId number
+function Profiling_Data.startMythicPlus(mapId)
+    resetCreatedFrames()
+    ResetCPUUsage()
+    currentMythicPlus = {
+        kind = "mythicplus",
+        mapId = mapId,
+        groupSize = 5,
+        startTime = time()
+    }
+end
+
+---@param isCompletion boolean
+---@param mapId number|nil
+function Profiling_Data.endMythicPlus(isCompletion, mapId)
+    if currentMythicPlus == nil then
+        return
     end
-end)
+
+    currentMythicPlus.success = isCompletion
+    currentMythicPlus.endTime = time()
+    table.insert(Profiling_Data_Storage.recordings, {
+        encounter = currentMythicPlus,
+        data = Profiling_Data.buildUsageTable()
+    })
+    currentMythicPlus = nil
+end
+
+
+
+if isScriptProfilingEnabled() then
+    hookCreateFrame()
+
+    local frame = CreateFrame("Frame", "Profiling_Data_Frame")
+    frame:RegisterEvent("ENCOUNTER_START")
+    frame:RegisterEvent("ENCOUNTER_END")
+    frame:RegisterEvent("ADDON_LOADED")
+    frame:RegisterEvent("CHALLENGE_MODE_START")
+    frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
+    frame:RegisterEvent("CHALLENGE_MODE_RESET")
+    frame:SetScript("OnEvent", function(frame, eventName, ...)
+        if eventName == "ENCOUNTER_START" then
+            Profiling_Data.startEncounter(...)
+        elseif eventName == "ENCOUNTER_END" then
+            Profiling_Data.encounterEnd(...)
+        elseif eventName == "CHALLENGE_MODE_START" then
+            Profiling_Data.startMythicPlus(...)
+        elseif eventName == "CHALLENGE_MODE_COMPLETED" or eventName == "CHALLENGE_MODE_RESET" then
+            Profiling_Data.endMythicPlus(eventName == "CHALLENGE_MODE_COMPLETED", ...)
+        elseif eventName == "ADDON_LOADED" then
+            local addonName = ...
+            if addonName == "Profiling_Data" then
+                Profiling_Data_Storage = Profiling_Data_Storage or { recordings = {} }
+            end
+        end
+    end)
+end
