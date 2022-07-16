@@ -2,9 +2,11 @@
 local Profiling_Data = LibStub:NewLibrary("Profiling_Data", 0)
 
 local functionRegistry = {}
+local functionDebugTime = {}
 
 function Profiling_Data.registerFunction(key, fn)
     functionRegistry[key] = fn
+    functionDebugTime[key] = 0
 end
 
 ---build a string key for a frame
@@ -43,9 +45,9 @@ local function hookCreateFrame()
     local function hookSetScript(frame, scriptType, fn, alreadyInstrumented)
         local name = frame:GetName()
         local parent = frame:GetParent()
-        if frame:IsToplevel() 
-            or frame:IsForbidden() 
-            or frame:IsProtected() 
+        if (frame.IsTopLevel and frame:IsToplevel())
+            or (frame.IsForbidden and frame:IsForbidden())
+            or (frame.IsProtected and frame:IsProtected())
             or (name ~= nil and string.match(name, "Blizzard") ~= nil)
             or (parent ~= nil and parent:GetDebugName() == "NamePlateDriverFrame")
             or name == "NamePlateDriverFrame" then
@@ -60,10 +62,16 @@ local function hookCreateFrame()
         local frameKey = Profiling_Data.frameKey(frame)
         -- print('hooking frame: ' .. frameKey)
 
-        Profiling_Data.registerFunction(strjoin(':', frameKey, scriptType), fn)
+        local wrappedFn = function(...) fn(...) end
+        local key = strjoin(':', frameKey, scriptType)
+        Profiling_Data.registerFunction(key, wrappedFn)
 
         local status, err = pcall(frame.SetScript, frame, scriptType, function(...)
-            local status, err = pcall(fn, ...)
+            local startTime = debugprofilestop()
+            local status, err = pcall(wrappedFn, ...)
+            local endTime = debugprofilestop()
+
+            functionDebugTime[key] = (functionDebugTime[key] or 0) + (endTime - startTime)
             if not status then
                 DevTools_Dump({
                     frame = frameKey,
@@ -83,8 +91,15 @@ local function hookCreateFrame()
     end
 
     local dummyFrame = CreateFrame("Frame")
-    local frameIndex = getmetatable(dummyFrame).__index
-    hooksecurefunc(frameIndex, 'SetScript', hookSetScript)
+    local dummyAnimGroup = dummyFrame:CreateAnimationGroup()
+    local dummyAnim = dummyAnimGroup:CreateAnimation()
+    local function hookmetatable(object)
+        local frameIndex = getmetatable(object).__index
+        hooksecurefunc(frameIndex, 'SetScript', hookSetScript)
+    end
+    hookmetatable(dummyFrame)
+    hookmetatable(dummyAnim)
+    hookmetatable(dummyAnimGroup)
 
     hooksecurefunc("CreateFrame", function(frameType, name, parent, template, index)
         local anonymous = true
@@ -140,12 +155,13 @@ local function functionUsage()
     local results = {}
     for key, value in pairs(functionRegistry) do
         local totalTime, count = GetFunctionCPUUsage(value, true)
-        local selfTime, _count = GetFunctionCPUUsage(value, false)
-        results[key] = {
-            totalTime = totalTime,
-            selfTime = selfTime,
-            callCount = count
-        }
+        if count > 0 then
+            results[key] = {
+                totalTime = totalTime,
+                callCount = count,
+                debugTime = functionDebugTime[key]
+            }
+        end
     end
     return results
 end
@@ -159,6 +175,9 @@ local function resetCreatedFrames()
         named = {},
         anonymous = {}
     }
+    for key, value in pairs(functionDebugTime) do
+        functionDebugTime[key] = 0
+    end
 end
 
 function Profiling_Data.buildUsageTable()
@@ -197,7 +216,7 @@ function Profiling_Data.encounterEnd(encounterID, encounterName, difficultyID, g
         -- don't do anything if we didn't see the encounter start. a mid-combat reload probably happened or we're in a key
         return
     end
-    currentEncounter.success = true
+    currentEncounter.success = success == 1
     currentEncounter.endTime = time()
 
     table.insert(Profiling_Data_Storage.recordings, {
