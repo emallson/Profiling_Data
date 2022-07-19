@@ -1,5 +1,15 @@
----@class LibProfiling_Data
+---@class Profiling_Data
+---@field hooks HookTable
 local Profiling_Data = LibStub:NewLibrary("Profiling_Data", 0)
+Profiling_Data.hooks = {}
+
+---@class Hook
+---@field hook fun(table)
+---@field reset fun()
+---@field usage fun(): any
+
+---@class HookTable
+
 
 local functionRegistry = {}
 local functionDebugTime = {}
@@ -41,6 +51,21 @@ local createdFrames = {
     anonymous = {},
 }
 
+local frameDebugTime = {}
+
+local function reportTiming(key, duration)
+    functionDebugTime[key] = functionDebugTime[key] + duration
+
+    local frameIndex = Profiling_Data.frameIndex:get()
+
+    local frameData = frameDebugTime[frameIndex]
+    if frameData == nil then
+        frameData = {}
+        frameDebugTime[frameIndex] = frameData
+    end
+    frameData[key] = (frameData[key] or 0) + duration
+end
+
 local function hookCreateFrame()
     local function hookSetScript(frame, scriptType, fn, alreadyInstrumented)
         local name = frame:GetName()
@@ -66,12 +91,12 @@ local function hookCreateFrame()
         local key = strjoin(':', frameKey, scriptType)
         Profiling_Data.registerFunction(key, wrappedFn)
 
-        local status, err = pcall(frame.SetScript, frame, scriptType, function(...)
+        frame:SetScript(scriptType, function(...)
             local startTime = debugprofilestop()
             local status, err = pcall(wrappedFn, ...)
             local endTime = debugprofilestop()
 
-            functionDebugTime[key] = (functionDebugTime[key] or 0) + (endTime - startTime)
+            reportTiming(key, endTime - startTime)
             if not status then
                 DevTools_Dump({
                     frame = frameKey,
@@ -80,14 +105,6 @@ local function hookCreateFrame()
                 })
             end
         end, true)
-
-        if not status then
-            DevTools_Dump({
-                frame = frameKey,
-                err = err,
-                loc = "instrumentation"
-            })
-        end
     end
 
     local dummyFrame = CreateFrame("Frame")
@@ -100,6 +117,8 @@ local function hookCreateFrame()
     hookmetatable(dummyFrame)
     hookmetatable(dummyAnim)
     hookmetatable(dummyAnimGroup)
+
+    Profiling_Data.hooks.event.hook(getmetatable(dummyFrame).__index)
 
     hooksecurefunc("CreateFrame", function(frameType, name, parent, template, index)
         local anonymous = true
@@ -121,7 +140,8 @@ local function hookCreateFrame()
             parent = parentName,
             template = template,
             index = index,
-            creationTime = time()
+            creationTime = time(),
+            frameIndex = Profiling_Data.frameIndex:get()
         }
 
         if not anonymous then
@@ -170,7 +190,7 @@ local function createFrameUsage()
     return createdFrames
 end
 
-local function resetCreatedFrames()
+local function resetState()
     createdFrames = {
         named = {},
         anonymous = {}
@@ -178,6 +198,9 @@ local function resetCreatedFrames()
     for key, value in pairs(functionDebugTime) do
         functionDebugTime[key] = 0
     end
+    frameDebugTime = {}
+    Profiling_Data.frameIndex:reset()
+    Profiling_Data.hooks.event.reset()
 end
 
 function Profiling_Data.buildUsageTable()
@@ -185,12 +208,21 @@ function Profiling_Data.buildUsageTable()
         addon = addonUsage(),
         fn = functionUsage(),
         CreateFrame = createFrameUsage(),
+        events = Profiling_Data.hooks.event.usage(),
+        frames = {
+            times = Profiling_Data.frameIndex:getTimes(),
+            data = frameDebugTime
+        }
     }
     return results
 end
 
-function Profiling_Data.dumpUsage()
-    DevTools_Dump(Profiling_Data.buildUsageTable())
+function Profiling_Data.dumpUsage(startKey)
+    if startKey then
+        DevTools_Dump(Profiling_Data.buildUsageTable()[startKey])
+    else
+        DevTools_Dump(Profiling_Data.buildUsageTable())
+    end
 end
 
 local currentEncounter = nil
@@ -199,7 +231,7 @@ function Profiling_Data.startEncounter(encounterId, encounterName, difficultyId,
     if currentMythicPlus ~= nil then
         return
     end
-    resetCreatedFrames()
+    resetState()
     ResetCPUUsage()
     currentEncounter = {
         kind = "raid",
@@ -223,12 +255,13 @@ function Profiling_Data.encounterEnd(encounterID, encounterName, difficultyID, g
         encounter = currentEncounter,
         data = Profiling_Data.buildUsageTable()
     })
+    resetState()
     currentEncounter = nil
 end
 
 ---@param mapId number
 function Profiling_Data.startMythicPlus(mapId)
-    resetCreatedFrames()
+    resetState()
     ResetCPUUsage()
     currentMythicPlus = {
         kind = "mythicplus",
@@ -251,14 +284,13 @@ function Profiling_Data.endMythicPlus(isCompletion, mapId)
         encounter = currentMythicPlus,
         data = Profiling_Data.buildUsageTable()
     })
+    resetState()
     currentMythicPlus = nil
 end
 
 
 
 if isScriptProfilingEnabled() then
-    hookCreateFrame()
-
     local frame = CreateFrame("Frame", "Profiling_Data_Frame")
     frame:RegisterEvent("ENCOUNTER_START")
     frame:RegisterEvent("ENCOUNTER_END")
@@ -279,6 +311,7 @@ if isScriptProfilingEnabled() then
             local addonName = ...
             if addonName == "Profiling_Data" then
                 Profiling_Data_Storage = Profiling_Data_Storage or { recordings = {} }
+                hookCreateFrame()
             end
         end
     end)

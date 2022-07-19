@@ -5,3 +5,5 @@
 
 libs\LibStub\LibStub.lua
 src\lib.lua
+src\frame.lua
+src\hooks\events.lua
