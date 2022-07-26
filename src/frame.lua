@@ -15,10 +15,7 @@ function frameIndex:reset()
     frameTimes = {}
 end
 
----Get the frame index. This doesn't necessarily correspond to the exact number of 
----frames since we started, but does count each frame in which `frameIndex` was called.
----@return integer
-function frameIndex:get()
+function frameIndex:tap()
     local currentTime = GetTime()
 
     if currentTime ~= lastKnownTime then
@@ -26,7 +23,13 @@ function frameIndex:get()
         internalFrameCounter = internalFrameCounter + 1
         table.insert(frameTimes, currentTime)
     end
+end
 
+---Get the frame index. This doesn't necessarily correspond to the exact number of 
+---frames since we started, but does count each frame in which `frameIndex` was called.
+---@return integer
+function frameIndex:get()
+    self:tap()
     return internalFrameCounter
 end
 

@@ -51,19 +51,8 @@ local createdFrames = {
     anonymous = {},
 }
 
-local frameDebugTime = {}
-
 local function reportTiming(key, duration)
     functionDebugTime[key] = functionDebugTime[key] + duration
-
-    local frameIndex = Profiling_Data.frameIndex:get()
-
-    local frameData = frameDebugTime[frameIndex]
-    if frameData == nil then
-        frameData = {}
-        frameDebugTime[frameIndex] = frameData
-    end
-    frameData[key] = (frameData[key] or 0) + duration
 end
 
 local function hookCreateFrame()
@@ -83,7 +72,7 @@ local function hookCreateFrame()
             return
         end
 
-
+        Profiling_Data.frameIndex:tap()
         local frameKey = Profiling_Data.frameKey(frame)
         -- print('hooking frame: ' .. frameKey)
 
@@ -198,7 +187,6 @@ local function resetState()
     for key, value in pairs(functionDebugTime) do
         functionDebugTime[key] = 0
     end
-    frameDebugTime = {}
     Profiling_Data.frameIndex:reset()
     Profiling_Data.hooks.event.reset()
 end
@@ -210,8 +198,7 @@ function Profiling_Data.buildUsageTable()
         CreateFrame = createFrameUsage(),
         events = Profiling_Data.hooks.event.usage(),
         frames = {
-            times = Profiling_Data.frameIndex:getTimes(),
-            data = frameDebugTime
+            times = Profiling_Data.frameIndex:getTimes()
         }
     }
     return results
